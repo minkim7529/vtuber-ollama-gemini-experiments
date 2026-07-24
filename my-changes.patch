@@ -1,0 +1,802 @@
+diff --git a/config_templates/conf.ZH.default.yaml b/config_templates/conf.ZH.default.yaml
+index 378f737..36d9230 100644
+--- a/config_templates/conf.ZH.default.yaml
++++ b/config_templates/conf.ZH.default.yaml
+@@ -298,6 +298,8 @@ character_config:
+       # 查看文档：https://github.com/rany2/edge-tts
+       # 使用 `edge-tts --list-voices` 列出所有可用语音
+       voice: zh-CN-XiaoxiaoNeural # 'en-US-AvaMultilingualNeural' #'zh-CN-XiaoxiaoNeural' # 'ja-JP-NanamiNeural'
++      rate: '+0%' # 语速调整，例如 '+10%'、'-5%'
++      pitch: '+0Hz' # 音调调整，例如 '+20Hz'、'-10Hz'
+ 
+     # pyttsx3_tts 没有任何配置。
+ 
+diff --git a/config_templates/conf.default.yaml b/config_templates/conf.default.yaml
+index 7ca681f..2493d73 100644
+--- a/config_templates/conf.default.yaml
++++ b/config_templates/conf.default.yaml
+@@ -290,6 +290,8 @@ character_config:
+       # Check out doc at https://github.com/rany2/edge-tts
+       # Use `edge-tts --list-voices` to list all available voices
+       voice: 'en-US-AvaMultilingualNeural' # 'en-US-AvaMultilingualNeural' #'zh-CN-XiaoxiaoNeural' # 'ja-JP-NanamiNeural'
++      rate: '+0%' # speaking rate adjustment, e.g. '+10%', '-5%'
++      pitch: '+0Hz' # pitch adjustment, e.g. '+20Hz', '-10Hz'
+ 
+     # pyttsx3_tts doesn't have any config.
+ 
+diff --git a/model_dict.json b/model_dict.json
+index e7682cf..08d9357 100644
+--- a/model_dict.json
++++ b/model_dict.json
+@@ -26,5 +26,24 @@
+                 "": 1
+             }
+         }
++    },
++    {
++        "name": "liveroid",
++        "description": "",
++        "url": "/live2d-models/liveroid/LiveroiD_A-Y01/LiveroiD_A-Y01.model3.json",
++        "kScale": 0.3,
++        "initialXshift": 0,
++        "initialYshift": 0,
++        "kXOffset": 0,
++        "emotionMap": {
++            "neutral": 2,
++            "anger": 1,
++            "disgust": 1,
++            "fear": 3,
++            "joy": 0,
++            "smirk": 2,
++            "sadness": 3,
++            "surprise": 0
++        }
+     }
+ ]
+\ No newline at end of file
+diff --git a/prompts/utils/proactive_speak_prompt.txt b/prompts/utils/proactive_speak_prompt.txt
+index 70f16ab..ed5e97b 100644
+--- a/prompts/utils/proactive_speak_prompt.txt
++++ b/prompts/utils/proactive_speak_prompt.txt
+@@ -1 +1 @@
+-Please say something that would be engaging and appropriate for the current context.
+\ No newline at end of file
++오빠가 한동안 아무 말도 하지 않고 있어. 하루답게 먼저 말을 걸어줘. 짧게 한두 문장으로만.
+diff --git a/pyproject.toml b/pyproject.toml
+index 6d2dee8..2d77367 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -8,7 +8,7 @@ dependencies = [
+     "anthropic>=0.40.0",
+     "azure-cognitiveservices-speech>=1.41.1",
+     "chardet>=5.2.0",
+-    "edge-tts>=7.0.0",
++    "edge-tts>=7.2.8",
+     "fastapi[standard]>=0.115.8",
+     "groq>=0.13.0",
+     "httpx>=0.28.1",
+@@ -32,12 +32,16 @@ dependencies = [
+     "tomli>=2.2.1",
+     "torch==2.2.2; sys_platform == 'darwin' and platform_machine == 'x86_64'",
+     "torch>=2.6.0; sys_platform == 'darwin' and platform_machine == 'arm64'",
+-    "torch>=2.6.0; sys_platform != 'darwin'",
++    "torch>=2.5.1; sys_platform != 'darwin'",
++    "torchaudio; sys_platform != 'darwin'",
+     "tqdm>=4.67.1",
+     "uvicorn[standard]>=0.33.0",
+     "websocket-client>=1.8.0",
+     "letta-client>=0.1.100",
+     "duckduckgo-mcp-server>=0.1.1",
++    "faster-whisper>=1.2.1",
++    "pillow>=12.3.0",
++    "coqui-tts>=0.27.5",
+ ]
+ 
+ [project.optional-dependencies]
+@@ -58,6 +62,15 @@ open-llm-vtuber = { path = ".", editable = true }
+ cudnn = ">=8.0,<9"
+ cudatoolkit = ">=11.0,<12"
+ 
++[tool.uv.sources]
++torch = [{ index = "pytorch-cu121", marker = "sys_platform != 'darwin'" }]
++torchaudio = [{ index = "pytorch-cu121", marker = "sys_platform != 'darwin'" }]
++
++[[tool.uv.index]]
++name = "pytorch-cu121"
++url = "https://download.pytorch.org/whl/cu121"
++explicit = true
++
+ [tool.ruff]
+ target-version = "py310"
+ 
+diff --git a/src/open_llm_vtuber/agent/agents/basic_memory_agent.py b/src/open_llm_vtuber/agent/agents/basic_memory_agent.py
+index 403b559..0177124 100644
+--- a/src/open_llm_vtuber/agent/agents/basic_memory_agent.py
++++ b/src/open_llm_vtuber/agent/agents/basic_memory_agent.py
+@@ -17,6 +17,7 @@ from ..stateless_llm.openai_compatible_llm import AsyncLLM as OpenAICompatibleAs
+ from ...chat_history_manager import get_history
+ from ..transformers import (
+     sentence_divider,
++    identity_guard,
+     actions_extractor,
+     tts_filter,
+     display_processor,
+@@ -586,6 +587,7 @@ class BasicMemoryAgent(AgentInterface):
+         @tts_filter(self._tts_preprocessor_config)
+         @display_processor()
+         @actions_extractor(self._live2d_model)
++        @identity_guard()
+         @sentence_divider(
+             faster_first_response=self._faster_first_response,
+             segment_method=self._segment_method,
+@@ -643,6 +645,20 @@ class BasicMemoryAgent(AgentInterface):
+                 return
+             else:
+                 logger.info("Starting simple chat completion.")
++                # Proactive-speak used to get a temperature bump here for
++                # phrasing variety on top of the situational variants picked
++                # in conversation_handler. Tested at +0.3/0.9 (this 7B local
++                # model would occasionally collapse into listing every
++                # live2d emotion keyword as disconnected fragments, with
++                # stray English garbage mixed in) and +0.1/0.8 (no collapse,
++                # but still produced run-on fragments and invented
++                # non-words like "툭발~!" live). A same-temperature
++                # comparison showed the bump wasn't reliably reducing
++                # duplication either - convergence to generic phrasing
++                # across different situational variants happens at the base
++                # temperature too. Since the bump only added coherence risk
++                # without a measurable diversity win, proactive-speak now
++                # just uses the same temperature as regular replies.
+                 token_stream = self._llm.chat_completion(messages, self._system)
+                 complete_response = ""
+                 async for event in token_stream:
+diff --git a/src/open_llm_vtuber/agent/stateless_llm/ollama_llm.py b/src/open_llm_vtuber/agent/stateless_llm/ollama_llm.py
+index dac26bd..ca8960b 100644
+--- a/src/open_llm_vtuber/agent/stateless_llm/ollama_llm.py
++++ b/src/open_llm_vtuber/agent/stateless_llm/ollama_llm.py
+@@ -1,8 +1,66 @@
+ import atexit
++import base64
++import io
++import json
++import re
++from typing import Any, AsyncIterator, Dict, List
++
++import httpx
+ import requests
+ from loguru import logger
++from openai import NOT_GIVEN, NotGiven
++from PIL import Image
++
+ from .openai_compatible_llm import AsyncLLM
+ 
++THINK_OPEN_TAG = "<think>"
++THINK_CLOSE_TAG = "</think>"
++MAX_IMAGE_DIMENSION = 1024
++
++# Qwen models occasionally slip stray Chinese into an otherwise-Korean reply
++# (e.g. "팀장那儿 갔다가", "딸랑딸啷하면서", full-width "，"/"？" punctuation) -
++# a known small-model/quantization artifact, not something prompt wording
++# reliably prevents. The persona never legitimately speaks Chinese, so Han
++# characters (CJK Unified Ideographs) and CJK/full-width punctuation are
++# unconditionally safe to drop.
++HANZI_RE = re.compile(r"[一-鿿　-〿＀-￯]+")
++
++# The persona prompt asks for no emoji, but a 7B model doesn't reliably obey
++# that (same instruction-following ceiling as the honorific/register leaks) -
++# strip them deterministically instead of relying on the prompt alone.
++EMOJI_RE = re.compile(
++    "["
++    "\U0001f000-\U0001faff"
++    "\U00002600-\U000027bf"
++    "\U00002b00-\U00002bff"
++    "\U0000fe0f"
++    "\U0000200d"
++    "]+"
++)
++
++
++def _downscale_base64_image(b64_data: str) -> str:
++    """
++    Downscales an image (e.g. a full 1920x1080 screen capture) so its
++    longest side is at most MAX_IMAGE_DIMENSION. Vision models process
++    images at native resolution, so a full-HD screenshot can take a very
++    long time to encode; downscaling keeps enough detail to describe the
++    screen while cutting that time drastically.
++    """
++    try:
++        raw = base64.b64decode(b64_data)
++        with Image.open(io.BytesIO(raw)) as img:
++            if max(img.size) <= MAX_IMAGE_DIMENSION:
++                return b64_data
++            img = img.convert("RGB")
++            img.thumbnail((MAX_IMAGE_DIMENSION, MAX_IMAGE_DIMENSION))
++            buffer = io.BytesIO()
++            img.save(buffer, format="JPEG", quality=85)
++            return base64.b64encode(buffer.getvalue()).decode("utf-8")
++    except Exception as e:
++        logger.warning(f"Failed to downscale image, sending as-is: {e}")
++        return b64_data
++
+ 
+ class OllamaLLM(AsyncLLM):
+     def __init__(
+@@ -15,10 +73,15 @@ class OllamaLLM(AsyncLLM):
+         temperature: float = 1.0,
+         keep_alive: float = -1,
+         unload_at_exit: bool = True,
++        repeat_penalty: float = 1.1,
++        top_p: float = 0.9,
+     ):
+         self.keep_alive = keep_alive
+         self.unload_at_exit = unload_at_exit
++        self.repeat_penalty = repeat_penalty
++        self.top_p = top_p
+         self.cleaned = False
++        self.native_url = base_url.replace("/v1", "") + "/api/chat"
+         super().__init__(
+             model=model,
+             base_url=base_url,
+@@ -51,6 +114,195 @@ class OllamaLLM(AsyncLLM):
+         if unload_at_exit:
+             atexit.register(self.cleanup)
+ 
++    async def chat_completion(
++        self,
++        messages: List[Dict[str, Any]],
++        system: str = None,
++        tools: List[Dict[str, Any]] | NotGiven = NOT_GIVEN,
++        temperature_override: float = None,
++    ) -> AsyncIterator[str | List[Any]]:
++        """
++        When no tools are involved, talks to Ollama's native /api/chat
++        endpoint with "think": false, which reliably disables Qwen3-style
++        thinking (the OpenAI-compatible endpoint does not honor this).
++        This cuts a simple reply from ~150+ reasoning tokens down to just
++        the answer itself.
++
++        When tools are supplied (e.g. MCP), falls back to the OpenAI-
++        compatible path so tool-calling keeps working; thinking may occur
++        there, so any <think>...</think> block is stripped from the output
++        as a safety net either way.
++
++        temperature_override: use a different sampling temperature than
++        self.temperature just for this call (e.g. proactive-speak wants
++        more randomness to avoid repeating itself; regular replies want
++        the configured, more consistent temperature).
++        """
++        if tools is NOT_GIVEN or not tools:
++            async for chunk in self._strip_stray_hanzi(
++                self._native_chat_completion(messages, system, temperature_override)
++            ):
++                yield chunk
++            return
++
++        async for chunk in self._strip_stray_hanzi(
++            self._strip_thinking(super().chat_completion(messages, system, tools))
++        ):
++            yield chunk
++
++    @staticmethod
++    def _to_native_message(msg: Dict[str, Any]) -> Dict[str, Any]:
++        """
++        Converts an OpenAI-style message (content may be a string, or a list
++        of {"type": "text"/"image_url", ...} parts) into Ollama's native
++        /api/chat schema, where "content" must be a plain string and images
++        are a separate top-level "images" list of raw base64 strings.
++        """
++        content = msg.get("content")
++        if not isinstance(content, list):
++            return msg
++
++        text_parts = []
++        images = []
++        for part in content:
++            if not isinstance(part, dict):
++                continue
++            part_type = part.get("type")
++            if part_type == "text":
++                text_parts.append(part.get("text", ""))
++            elif part_type == "image_url":
++                url = part.get("image_url", {}).get("url", "")
++                if url.startswith("data:image"):
++                    images.append(_downscale_base64_image(url.split(",", 1)[-1]))
++
++        native_msg = {"role": msg.get("role"), "content": "\n".join(text_parts)}
++        if images:
++            native_msg["images"] = images
++        return native_msg
++
++    async def _native_chat_completion(
++        self,
++        messages: List[Dict[str, Any]],
++        system: str = None,
++        temperature_override: float = None,
++    ) -> AsyncIterator[str]:
++        payload_messages = [self._to_native_message(m) for m in messages]
++        if system:
++            payload_messages = [
++                {"role": "system", "content": system},
++                *payload_messages,
++            ]
++
++        temperature = (
++            temperature_override
++            if temperature_override is not None
++            else self.temperature
++        )
++        payload = {
++            "model": self.model,
++            "messages": payload_messages,
++            "stream": True,
++            "think": False,
++            "options": {
++                "temperature": temperature,
++                "repeat_penalty": self.repeat_penalty,
++                "top_p": self.top_p,
++            },
++        }
++
++        try:
++            async with httpx.AsyncClient(timeout=None) as client:
++                async with client.stream(
++                    "POST", self.native_url, json=payload
++                ) as response:
++                    logger.debug(
++                        f"Ollama native chat status: {response.status_code}"
++                    )
++                    if response.status_code != 200:
++                        error_body = (await response.aread()).decode(
++                            "utf-8", errors="replace"
++                        )
++                        logger.error(
++                            f"Ollama native chat endpoint returned {response.status_code}: {error_body}"
++                        )
++                        yield f"Error calling the chat endpoint: Ollama returned {response.status_code}. See the logs for details."
++                        return
++                    line_count = 0
++                    async for line in response.aiter_lines():
++                        line_count += 1
++                        if not line:
++                            continue
++                        data = json.loads(line)
++                        content = data.get("message", {}).get("content", "")
++                        if content:
++                            yield content
++                        if data.get("done"):
++                            break
++                    logger.debug(f"Ollama native chat lines received: {line_count}")
++        except httpx.ConnectError as e:
++            logger.error(f"Error calling the Ollama native chat endpoint: {e}")
++            yield "Error calling the chat endpoint: Connection error. Failed to connect to the LLM API. Check the configurations and the reachability of the LLM backend. See the logs for details."
++        except Exception as e:
++            logger.error(f"Ollama native chat endpoint error: {e}")
++            yield "Error calling the chat endpoint: Error occurred while generating response. See the logs for details."
++
++    @staticmethod
++    async def _strip_stray_hanzi(
++        source: AsyncIterator[str | List[Any]],
++    ) -> AsyncIterator[str | List[Any]]:
++        """Drops stray Chinese characters and emoji from a streamed
++        response. Each streamed chunk is a whole number of Unicode
++        codepoints (never a split surrogate), so per-chunk regex
++        substitution is safe - no cross-chunk buffering needed."""
++        async for item in source:
++            if not isinstance(item, str):
++                yield item
++                continue
++            yield EMOJI_RE.sub("", HANZI_RE.sub("", item))
++
++    @staticmethod
++    async def _strip_thinking(
++        source: AsyncIterator[str | List[Any]],
++    ) -> AsyncIterator[str | List[Any]]:
++        """Strips <think>...</think> blocks out of a streamed response."""
++        in_think = False
++        buffer = ""
++        max_tag_len = max(len(THINK_OPEN_TAG), len(THINK_CLOSE_TAG))
++
++        async for item in source:
++            if not isinstance(item, str):
++                yield item
++                continue
++
++            buffer += item
++            visible = ""
++
++            while True:
++                if not in_think:
++                    idx = buffer.find(THINK_OPEN_TAG)
++                    if idx == -1:
++                        keep_from = max(0, len(buffer) - (max_tag_len - 1))
++                        visible += buffer[:keep_from]
++                        buffer = buffer[keep_from:]
++                        break
++                    visible += buffer[:idx]
++                    buffer = buffer[idx + len(THINK_OPEN_TAG) :]
++                    in_think = True
++                else:
++                    idx = buffer.find(THINK_CLOSE_TAG)
++                    if idx == -1:
++                        keep_from = max(0, len(buffer) - (max_tag_len - 1))
++                        buffer = buffer[keep_from:]
++                        break
++                    buffer = buffer[idx + len(THINK_CLOSE_TAG) :]
++                    in_think = False
++
++            if visible:
++                yield visible
++
++        if buffer and not in_think:
++            yield buffer
++
+     def __del__(self):
+         """Destructor to unload the model"""
+         self.cleanup()
+diff --git a/src/open_llm_vtuber/agent/stateless_llm/openai_compatible_llm.py b/src/open_llm_vtuber/agent/stateless_llm/openai_compatible_llm.py
+index e38a332..665d6b2 100644
+--- a/src/open_llm_vtuber/agent/stateless_llm/openai_compatible_llm.py
++++ b/src/open_llm_vtuber/agent/stateless_llm/openai_compatible_llm.py
+@@ -62,6 +62,7 @@ class AsyncLLM(StatelessLLMInterface):
+         messages: List[Dict[str, Any]],
+         system: str = None,
+         tools: List[Dict[str, Any]] | NotGiven = NOT_GIVEN,
++        temperature_override: float = None,
+     ) -> AsyncIterator[str | List[ChoiceDeltaToolCall]]:
+         """
+         Generates a chat completion using the OpenAI API asynchronously.
+@@ -70,6 +71,9 @@ class AsyncLLM(StatelessLLMInterface):
+         - messages (List[Dict[str, Any]]): The list of messages to send to the API.
+         - system (str, optional): System prompt to use for this completion.
+         - tools (List[Dict[str, str]], optional): List of tools to use for this completion.
++        - temperature_override (float, optional): Use this instead of self.temperature
++            for this call only (e.g. proactive-speak wants more variety than regular
++            replies).
+ 
+         Yields:
+         - str: The content of each chunk from the API response.
+@@ -96,6 +100,11 @@ class AsyncLLM(StatelessLLMInterface):
+             logger.debug(f"Messages: {messages_with_system}")
+ 
+             available_tools = tools if self.support_tools else NOT_GIVEN
++            temperature = (
++                temperature_override
++                if temperature_override is not None
++                else self.temperature
++            )
+ 
+             stream: AsyncStream[
+                 ChatCompletionChunk
+@@ -103,7 +112,7 @@ class AsyncLLM(StatelessLLMInterface):
+                 messages=messages_with_system,
+                 model=self.model,
+                 stream=True,
+-                temperature=self.temperature,
++                temperature=temperature,
+                 tools=available_tools,
+             )
+             logger.debug(
+diff --git a/src/open_llm_vtuber/agent/stateless_llm_factory.py b/src/open_llm_vtuber/agent/stateless_llm_factory.py
+index c5d8112..122404e 100644
+--- a/src/open_llm_vtuber/agent/stateless_llm_factory.py
++++ b/src/open_llm_vtuber/agent/stateless_llm_factory.py
+@@ -59,6 +59,8 @@ class LLMFactory:
+                 temperature=kwargs.get("temperature"),
+                 keep_alive=kwargs.get("keep_alive"),
+                 unload_at_exit=kwargs.get("unload_at_exit"),
++                repeat_penalty=kwargs.get("repeat_penalty", 1.1),
++                top_p=kwargs.get("top_p", 0.9),
+             )
+ 
+         elif llm_provider == "llama_cpp_llm":
+diff --git a/src/open_llm_vtuber/agent/transformers.py b/src/open_llm_vtuber/agent/transformers.py
+index 4a218ea..b756e17 100644
+--- a/src/open_llm_vtuber/agent/transformers.py
++++ b/src/open_llm_vtuber/agent/transformers.py
+@@ -1,3 +1,5 @@
++import random
++import re
+ from typing import AsyncIterator, Tuple, Callable, List, Union, Dict, Any
+ from functools import wraps
+ from .output_types import Actions, SentenceOutput, DisplayText
+@@ -8,6 +10,26 @@ from ..utils.sentence_divider import SentenceDivider
+ from ..utils.sentence_divider import SentenceWithTags, TagState
+ from loguru import logger
+ 
++# The small local model occasionally flips the fixed user/persona
++# relationship - claiming to itself BE the user's older brother
++# ("내가 너의 오빠야"), or telling the user they're the persona's little
++# sister ("당신은 하루의 여동생이에요"). Both are always wrong for this
++# character (the persona is always the younger sister, the user is always
++# "오빠"), so there's no false-positive risk in catching them outright.
++# Prompt wording alone didn't hold reliably across longer/messier sessions,
++# so this deterministically catches it at the sentence level - the same
++# granularity TTS/display already consume - and swaps in a safe line
++# instead of letting the reversed claim reach the user.
++IDENTITY_REVERSAL_RE = re.compile(
++    r"(내가|나는|난)\s*(너의|당신의|니)?\s*오빠"
++    r"|(너는|넌|너가|네가|당신은|당신이)\s*.{0,15}?여동생"
++)
++IDENTITY_GUARD_FALLBACKS = [
++    "오빠잖아. 갑자기 왜 그래?",
++    "오빠 맞잖아, 몰랐어?",
++    "무슨 소리야, 오빠면서.",
++]
++
+ 
+ def sentence_divider(
+     faster_first_response: bool = True,
+@@ -55,6 +77,37 @@ def sentence_divider(
+     return decorator
+ 
+ 
++def identity_guard():
++    """
++    Decorator inserted right after sentence_divider, so it sees whole,
++    completed sentences rather than raw token chunks. Passes dicts through
++    unchanged; for SentenceWithTags, swaps the text for a safe fallback
++    line if it matches IDENTITY_REVERSAL_RE.
++    """
++
++    def decorator(
++        func: Callable[..., AsyncIterator[Union[SentenceWithTags, Dict[str, Any]]]],
++    ) -> Callable[..., AsyncIterator[Union[SentenceWithTags, Dict[str, Any]]]]:
++        @wraps(func)
++        async def wrapper(
++            *args, **kwargs
++        ) -> AsyncIterator[Union[SentenceWithTags, Dict[str, Any]]]:
++            stream = func(*args, **kwargs)
++            async for item in stream:
++                if isinstance(item, SentenceWithTags) and IDENTITY_REVERSAL_RE.search(
++                    item.text
++                ):
++                    logger.warning(
++                        f"identity_guard caught reversed-identity sentence: {item.text!r}"
++                    )
++                    item.text = random.choice(IDENTITY_GUARD_FALLBACKS)
++                yield item
++
++        return wrapper
++
++    return decorator
++
++
+ def actions_extractor(live2d_model: Live2dModel):
+     """
+     Decorator that extracts actions from sentences, passing through dicts.
+diff --git a/src/open_llm_vtuber/config_manager/stateless_llm.py b/src/open_llm_vtuber/config_manager/stateless_llm.py
+index 5521d3a..37aec62 100644
+--- a/src/open_llm_vtuber/config_manager/stateless_llm.py
++++ b/src/open_llm_vtuber/config_manager/stateless_llm.py
+@@ -99,6 +99,8 @@ class OllamaConfig(OpenAICompatibleConfig):
+     interrupt_method: Literal["system", "user"] = Field(
+         "system", alias="interrupt_method"
+     )
++    repeat_penalty: float = Field(1.1, alias="repeat_penalty")
++    top_p: float = Field(0.9, alias="top_p")
+ 
+     # Ollama-specific descriptions
+     _OLLAMA_DESCRIPTIONS: ClassVar[dict[str, Description]] = {
+@@ -115,6 +117,14 @@ class OllamaConfig(OpenAICompatibleConfig):
+             en="Unload the model when the program exits.",
+             zh="是否在程序退出时卸载模型。",
+         ),
++        "repeat_penalty": Description(
++            en="Penalizes repeated tokens/phrases. 1.0 = off, higher = less repetition.",
++            zh="惩罚重复的词元/短语。1.0 为关闭，数值越高重复越少。",
++        ),
++        "top_p": Description(
++            en="Nucleus sampling cutoff. Lower values make output more focused/less random.",
++            zh="核采样阈值。数值越低输出越集中、随机性越低。",
++        ),
+     }
+ 
+     DESCRIPTIONS: ClassVar[dict[str, Description]] = {
+diff --git a/src/open_llm_vtuber/config_manager/tts.py b/src/open_llm_vtuber/config_manager/tts.py
+index 02c6f4c..2b49f31 100644
+--- a/src/open_llm_vtuber/config_manager/tts.py
++++ b/src/open_llm_vtuber/config_manager/tts.py
+@@ -44,12 +44,22 @@ class EdgeTTSConfig(I18nMixin):
+     """Configuration for Edge TTS."""
+ 
+     voice: str = Field(..., alias="voice")
++    rate: str = Field("+0%", alias="rate")
++    pitch: str = Field("+0Hz", alias="pitch")
+ 
+     DESCRIPTIONS: ClassVar[Dict[str, Description]] = {
+         "voice": Description(
+             en="Voice name to use for Edge TTS (use 'edge-tts --list-voices' to list available voices)",
+             zh="Edge TTS 使用的语音名称（使用 'edge-tts --list-voices' 列出可用语音）",
+         ),
++        "rate": Description(
++            en="Speaking rate adjustment, e.g. '+10%', '-5%'",
++            zh="语速调整，例如 '+10%'、'-5%'",
++        ),
++        "pitch": Description(
++            en="Pitch adjustment, e.g. '+20Hz', '-10Hz'",
++            zh="音调调整，例如 '+20Hz'、'-10Hz'",
++        ),
+     }
+ 
+ 
+diff --git a/src/open_llm_vtuber/conversations/conversation_handler.py b/src/open_llm_vtuber/conversations/conversation_handler.py
+index 02780b4..d4ba64c 100644
+--- a/src/open_llm_vtuber/conversations/conversation_handler.py
++++ b/src/open_llm_vtuber/conversations/conversation_handler.py
+@@ -1,5 +1,7 @@
+ import asyncio
+ import json
++import random
++from collections import deque
+ from typing import Dict, Optional, Callable
+ 
+ import numpy as np
+@@ -15,6 +17,87 @@ from .conversation_utils import EMOJI_LIST
+ from .types import GroupConversationState
+ from prompts import prompt_loader
+ 
++# Picked at random per proactive-speak trigger so the LLM isn't asked to
++# "vary it yourself" (it doesn't - it tends to recombine the same stock
++# phrases). Forcing one concrete behavior per call gives real variety.
++PROACTIVE_SPEAK_VARIANTS = [
++    "심심하다고 오빠한테 칭얼대며 관심을 끌어줘.",
++    "화면 이미지가 같이 전달됐다면 오빠가 지금 뭘 하고 있는지 보고 자연스럽게 한마디 참견하거나 물어봐줘. 이미지가 없다면 다른 걸로 말해줘.",
++    "오빠 안부를 묻거나, 문득 오빠 생각이 났다는 듯 말을 걸어줘.",
++    "오늘 있었던 사소한 생각이나 농담처럼, 갑자기 생각난 아무 말이나 툭 던져줘.",
++    "오빠가 대답을 안 해준다고 살짝 삐진 티를 내줘.",
++]
++
++# Tried listing the specific stock phrases the model kept falling back to and
++# telling it not to use them ("이런 문구는 쓰지 마: 'X', 'Y', ..."). On this
++# 7B local model that backfired hard - quoting the exact banned strings in
++# every single proactive-speak prompt acted as an anchor and made the model
++# echo them (sometimes verbatim) far more than when they weren't mentioned at
++# all. Negative instructions with literal quoted text don't reliably work on
++# a model this size; state the desired behavior positively instead, with no
++# quoted strings for it to latch onto.
++#
++# Same reasoning applies to the "don't always open with 오빠~" rule below -
++# describing the desired variety instead of naming the exact banned opener.
++PROACTIVE_SPEAK_STYLE_NOTE = (
++    "\n\n짧은 문자 보내듯 자연스럽게, 상투적이지 않은 그때그때 다른 표현으로 말해줘. "
++    "문장을 시작하는 방식도 매번 다르게 - 이름부터 부르고 시작할 때도 있고, "
++    "이름 없이 바로 용건이나 감정부터 꺼낼 때도 있게 섞어줘."
++)
++
++# Stacking the variant + style-note + avoid-repeats notes on top of the base
++# prompt buries the persona's core formatting rules earlier in context;
++# restating them last (where a small model weighs instructions most) keeps
++# output from drifting into run-on sentences or polite-register endings.
++PROACTIVE_SPEAK_FORMAT_REMINDER = "\n\n한두 문장으로 짧게, 100% 반말로 말해줘."
++
++# Remembers each client's last few proactive-speak lines so the next one can
++# be told not to repeat them (skip_memory means the LLM has no other way to
++# know what it just said).
++_recent_proactive_utterances: Dict[str, deque] = {}
++
++# Remembers each client's last-picked variant index so back-to-back triggers
++# never draw the same situational instruction twice in a row. random.choice
++# alone has a 1-in-5 chance of repeating the prior variant, and when that
++# happens the model reliably produces near-identical output (observed live:
++# two consecutive proactive turns both about "엄마랑 같이 가야 해서") since
++# it's answering the same instruction with the same prior context. Excluding
++# the last pick is a guaranteed fix, unlike the soft "don't repeat" note
++# below, which only tells the model not to reuse phrasing, not the topic.
++_last_proactive_variant_index: Dict[str, int] = {}
++
++
++def _pick_proactive_variant(client_uid: str) -> str:
++    last_index = _last_proactive_variant_index.get(client_uid)
++    choices = range(len(PROACTIVE_SPEAK_VARIANTS))
++    if last_index is not None:
++        choices = [i for i in choices if i != last_index]
++    index = random.choice(list(choices))
++    _last_proactive_variant_index[client_uid] = index
++    return PROACTIVE_SPEAK_VARIANTS[index]
++
++
++def _record_proactive_utterance(client_uid: str, task: "asyncio.Task") -> None:
++    try:
++        response = task.result()
++    except Exception:
++        return
++    if not response:
++        return
++    history = _recent_proactive_utterances.setdefault(client_uid, deque(maxlen=3))
++    history.append(response)
++
++
++def _build_proactive_avoid_repeats_note(client_uid: str) -> str:
++    history = _recent_proactive_utterances.get(client_uid)
++    if not history:
++        return ""
++    quoted = ", ".join(f'"{h}"' for h in history)
++    return (
++        f"\n\n당신이 최근에 이미 이렇게 말했어: {quoted}\n"
++        "이번엔 내용도 표현도 완전히 다르게, 절대 비슷하게 말하지 마."
++    )
++
+ 
+ async def handle_conversation_trigger(
+     msg_type: str,
+@@ -38,7 +121,14 @@ async def handle_conversation_trigger(
+             prompt_name = "proactive_speak_prompt"
+             prompt_file = context.system_config.tool_prompts.get(prompt_name)
+             if prompt_file:
+-                user_input = prompt_loader.load_util(prompt_file)
++                user_input = (
++                    prompt_loader.load_util(prompt_file)
++                    + "\n\n"
++                    + _pick_proactive_variant(client_uid)
++                    + PROACTIVE_SPEAK_STYLE_NOTE
++                    + _build_proactive_avoid_repeats_note(client_uid)
++                    + PROACTIVE_SPEAK_FORMAT_REMINDER
++                )
+             else:
+                 logger.warning("Proactive speak prompt not configured, using default")
+                 user_input = "Please say something."
+@@ -96,7 +186,7 @@ async def handle_conversation_trigger(
+             )
+     else:
+         # Use client_uid as task key for individual conversations
+-        current_conversation_tasks[client_uid] = asyncio.create_task(
++        task = asyncio.create_task(
+             process_single_conversation(
+                 context=context,
+                 websocket_send=websocket.send_text,
+@@ -107,6 +197,11 @@ async def handle_conversation_trigger(
+                 metadata=metadata,
+             )
+         )
++        if msg_type == "ai-speak-signal":
++            task.add_done_callback(
++                lambda t, uid=client_uid: _record_proactive_utterance(uid, t)
++            )
++        current_conversation_tasks[client_uid] = task
+ 
+ 
+ async def handle_individual_interrupt(
+diff --git a/src/open_llm_vtuber/tts/edge_tts.py b/src/open_llm_vtuber/tts/edge_tts.py
+index c96cc02..0bba16d 100644
+--- a/src/open_llm_vtuber/tts/edge_tts.py
++++ b/src/open_llm_vtuber/tts/edge_tts.py
+@@ -14,8 +14,10 @@ sys.path.append(current_dir)
+ 
+ 
+ class TTSEngine(TTSInterface):
+-    def __init__(self, voice="en-US-AvaMultilingualNeural"):
++    def __init__(self, voice="en-US-AvaMultilingualNeural", rate="+0%", pitch="+0Hz"):
+         self.voice = voice
++        self.rate = rate
++        self.pitch = pitch
+ 
+         self.temp_audio_file = "temp"
+         self.file_extension = "mp3"
+@@ -40,7 +42,9 @@ class TTSEngine(TTSInterface):
+         file_name = self.generate_cache_file_name(file_name_no_ext, self.file_extension)
+ 
+         try:
+-            communicate = edge_tts.Communicate(text, self.voice)
++            communicate = edge_tts.Communicate(
++                text, self.voice, rate=self.rate, pitch=self.pitch
++            )
+             communicate.save_sync(file_name)
+         except Exception as e:
+             logger.critical(f"\nError: edge-tts unable to generate audio: {e}")
+diff --git a/src/open_llm_vtuber/tts/tts_factory.py b/src/open_llm_vtuber/tts/tts_factory.py
+index 0804c46..394ce2e 100644
+--- a/src/open_llm_vtuber/tts/tts_factory.py
++++ b/src/open_llm_vtuber/tts/tts_factory.py
+@@ -22,7 +22,11 @@ class TTSFactory:
+         elif engine_type == "edge_tts":
+             from .edge_tts import TTSEngine as EdgeTTSEngine
+ 
+-            return EdgeTTSEngine(kwargs.get("voice"))
++            return EdgeTTSEngine(
++                kwargs.get("voice"),
++                kwargs.get("rate", "+0%"),
++                kwargs.get("pitch", "+0Hz"),
++            )
+         elif engine_type == "pyttsx3_tts":
+             from .pyttsx3_tts import TTSEngine as Pyttsx3TTSEngine
+ 

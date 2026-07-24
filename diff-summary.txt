@@ -1,0 +1,16 @@
+ config_templates/conf.ZH.default.yaml              |   2 +
+ config_templates/conf.default.yaml                 |   2 +
+ model_dict.json                                    |  19 ++
+ prompts/utils/proactive_speak_prompt.txt           |   2 +-
+ pyproject.toml                                     |  17 +-
+ .../agent/agents/basic_memory_agent.py             |  16 ++
+ .../agent/stateless_llm/ollama_llm.py              | 252 +++++++++++++++++++++
+ .../agent/stateless_llm/openai_compatible_llm.py   |  11 +-
+ src/open_llm_vtuber/agent/stateless_llm_factory.py |   2 +
+ src/open_llm_vtuber/agent/transformers.py          |  53 +++++
+ .../config_manager/stateless_llm.py                |  10 +
+ src/open_llm_vtuber/config_manager/tts.py          |  10 +
+ .../conversations/conversation_handler.py          |  99 +++++++-
+ src/open_llm_vtuber/tts/edge_tts.py                |   8 +-
+ src/open_llm_vtuber/tts/tts_factory.py             |   6 +-
+ 15 files changed, 500 insertions(+), 9 deletions(-)
