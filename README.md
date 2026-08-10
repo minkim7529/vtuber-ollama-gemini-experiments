@@ -138,11 +138,6 @@ IDENTITY_REVERSAL_RE = re.compile(
     r"(내가|나는|난)\s*(너의|당신의|니)?\s*오빠"
     r"|(너는|넌|너가|네가|당신은|당신이)\s*.{0,15}?여동생"
 )
-IDENTITY_GUARD_FALLBACKS = [
-    "오빠잖아. 갑자기 왜 그래?",
-    "오빠 맞잖아, 몰랐어?",
-    "무슨 소리야, 오빠면서.",
-]
 
 def identity_guard():
     def decorator(func):
@@ -165,11 +160,10 @@ def identity_guard():
 
 ```python
 PROACTIVE_SPEAK_VARIANTS = [
-    "심심하다고 오빠한테 칭얼대며 관심을 끌어줘.",
-    "화면 이미지가 같이 전달됐다면 오빠가 지금 뭘 하고 있는지 보고 자연스럽게 참견해줘.",
-    "오빠 안부를 묻거나, 문득 오빠 생각이 났다는 듯 말을 걸어줘.",
+    "화면 이미지가 같이 전달됐다면 user가 지금 뭘 하고 있는지 보고 자연스럽게 참견해줘.",
+    "user의 안부를 묻거나, 문득 user 생각이 났다는 듯 말을 걸어줘.",
     "오늘 있었던 사소한 생각이나 농담처럼, 갑자기 생각난 아무 말이나 툭 던져줘.",
-    "오빠가 대답을 안 해준다고 살짝 삐진 티를 내줘.",
+    "user가 대답을 안 해준다고 살짝 삐진 티를 내줘.",
 ]
 
 def _pick_proactive_variant(client_uid: str) -> str:
